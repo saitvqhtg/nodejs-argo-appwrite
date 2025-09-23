@@ -21,7 +21,7 @@ jobs:
           if [ -z "$APPWRITE_PROJECT_ID" ]; then echo "::error::Secret 'APPWRITE_PROJECT_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
-          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::Secret 'GIT_PAT' 未设置！"; exit 1; fi
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::Secret 'GIT_TOKEN' 未设置！"; exit 1; fi
           echo "所有 Secrets 都已加载。"
 
       - name: 安装 Appwrite CLI 和 JQ
@@ -34,11 +34,11 @@ jobs:
           appwrite client --endpoint "${APPWRITE_API_ENDPOINT}" --project-id "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}" --self-signed true
           echo "Appwrite CLI 登录成功！"
 
-      - name: 检查状态并决定是否重新部署
-        id: check_status
+      - name: 检查部署状态并按需清理
+        id: check_and_cleanup # id 保持，供后续步骤使用
         run: |
           echo "正在获取部署列表..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --project-id "${APPWRITE_PROJECT_ID}" --json)
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
           
           HAS_FAILED=$(echo "$DEPLOYMENTS_JSON" | jq -r 'any(.deployments[]; .status == "failed")')
           TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
@@ -47,7 +47,15 @@ jobs:
             if [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
               echo "没有发现任何部署，将触发首次部署。"
             else
-              echo "发现一个或多个失败的部署。"
+              echo "发现一个或多个失败的部署。正在清理所有现有部署..."
+              ALL_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[]."$id"')
+              if [ -n "$ALL_DEPLOYMENT_IDS" ]; then
+                for ID in $ALL_DEPLOYMENT_IDS; do
+                  echo "正在删除部署，ID: ${ID}"
+                  appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --force
+                done
+                echo "已完成所有旧部署的清理。"
+              fi
             fi
             echo "should_redeploy=true" >> $GITHUB_OUTPUT
           else
@@ -55,34 +63,19 @@ jobs:
             echo "should_redeploy=false" >> $GITHUB_OUTPUT
           fi
 
-      # 只有在需要重新部署时才运行以下步骤
       - name: 检出 Appwrite 源仓库
-        if: steps.check_status.outputs.should_redeploy == 'true'
+        if: steps.check_and_cleanup.outputs.should_redeploy == 'true'
         uses: actions/checkout@v4
         with:
           token: ${{ env.GITHUB_TOKEN }}
 
-      - name: 清理旧部署并通过 Git Push 触发新部署
-        if: steps.check_status.outputs.should_redeploy == 'true'
+      - name: 通过 Git Push 触发新部署
+        if: steps.check_and_cleanup.outputs.should_redeploy == 'true'
         run: |
-          echo "正在清理所有现有部署..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --project-id "${APPWRITE_PROJECT_ID}" --json)
-          ALL_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[]."$id"')
-          if [ -n "$ALL_DEPLOYMENT_IDS" ]; then
-            for ID in $ALL_DEPLOYMENT_IDS; do
-              echo "正在删除部署，ID: ${ID}"
-              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --project-id "${APPWRITE_PROJECT_ID}" --force
-            done
-            echo "已完成所有旧部署的清理。"
-          else
-            echo "没有需要清理的部署。"
-          fi
-          
           echo "正在通过 Git Push 触发新的部署..."
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # 创建并提交时间戳文件
           echo "Triggered at $(TZ='Asia/Shanghai' date)" > version.txt   
           git add version.txt
           git commit -m "chore: Appwrite auto-deployment"
