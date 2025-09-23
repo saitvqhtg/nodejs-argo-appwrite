@@ -1,13 +1,13 @@
 const express = require("express");
 const app = express();
+const axios = require("axios");
 const os = require('os');
 const fs = require("fs");
 const path = require("path");
 const { promisify } = require('util');
 const exec = promisify(require('child_process').exec);
-const { execSync } = require('child_process');
 
-// 环境变量 (保持不变)
+// 环境变量
 const UPLOAD_URL = process.env.UPLOAD_URL || '';
 const PROJECT_URL = process.env.PROJECT_URL || '';
 const AUTO_ACCESS = process.env.AUTO_ACCESS || false;
@@ -25,11 +25,9 @@ const CFIP = process.env.CFIP || 'www.visa.com.sg';
 const CFPORT = process.env.CFPORT || 443;
 const NAME = process.env.NAME || 'Vls';
 
-// 路径定义 (保持不变)
+// 路径定义
 const subPath = path.join(FILE_PATH, 'sub.txt');
 const bootLogPath = path.join(FILE_PATH, 'boot.log');
-
-// 只保留服务器运行逻辑
 
 // 根路由
 app.get("/", function(req, res) {
@@ -73,7 +71,7 @@ uuid: ${UUID}`;
         }
     }
 
-    // 运行xray
+    // 运行xr-ay
     const config = {
         log: { access: '/dev/null', error: '/dev/null', loglevel: 'none' },
         inbounds: [
@@ -95,7 +93,6 @@ uuid: ${UUID}`;
     if (ARGO_AUTH.match(/^[A-Z0-9a-z=]{120,250}$/)) {
         args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 run --token ${ARGO_AUTH}`;
     } else if (ARGO_AUTH.match(/TunnelSecret/)) {
-        // ... (argoType logic)
         args = `tunnel --edge-ip-version auto --config ${path.join(FILE_PATH, 'tunnel.yml')} run`;
     } else {
         args = `tunnel --edge-ip-version auto --no-autoupdate --protocol http2 --logfile ${bootLogPath} --loglevel info --url http://localhost:${ARGO_PORT}`;
@@ -113,8 +110,7 @@ async function generateAndServeLinks() {
     if (ARGO_AUTH && ARGO_DOMAIN) {
         argoDomain = ARGO_DOMAIN;
     } else {
-        // 等待并读取 boot.log 来获取临时域名
-        for (let i = 0; i < 10; i++) { // 最多等待20秒
+        for (let i = 0; i < 10; i++) {
             if (fs.existsSync(bootLogPath)) {
                 const logContent = fs.readFileSync(bootLogPath, 'utf-8');
                 const domainMatch = logContent.match(/https?:\/\/([^ ]*trycloudflare\.com)/);
@@ -134,8 +130,19 @@ async function generateAndServeLinks() {
 
     console.log('ARGO_DOMAIN:', argoDomain);
 
-    const metaInfo = execSync('curl -s https://speed.cloudflare.com/meta | awk -F\\" \'{print $26"-"$18}\' | sed -e \'s/ /_/g\'', { encoding: 'utf-8' }).trim();
-    const ISP = metaInfo;
+    // 获取 ISP 信息
+    let ISP = 'Unknown-ISP';
+    try {
+        // 使用 axios 替代 curl 命令来获取 ISP 信息
+        const response = await axios.get('https://speed.cloudflare.com/meta');
+        const data = response.data;
+        const country = data.country || 'Unknown';
+        const asOrganization = data.asOrganization || 'Unknown';
+        ISP = `${country}-${asOrganization}`.replace(/\s/g, '_');
+    } catch (error) {
+        console.error("Failed to get ISP info using axios:", error.message);
+    }
+
     const VMESS = { v: '2', ps: `${NAME}-${ISP}`, add: CFIP, port: CFPORT, id: UUID, aid: '0', scy: 'none', net: 'ws', type: 'none', host: argoDomain, path: '/vmess-argo?ed=2560', tls: 'tls', sni: argoDomain, alpn: '' };
     const subTxt = `vless://${UUID}@${CFIP}:${CFPORT}?encryption=none&security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=%2Fvless-argo%3Fed%3D2560#${NAME}-${ISP}\n\nvmess://${Buffer.from(JSON.stringify(VMESS)).toString('base64')}\n\ntrojan://${UUID}@${CFIP}:${CFPORT}?security=tls&sni=${argoDomain}&type=ws&host=${argoDomain}&path=%2Ftrojan-argo%3Fed%3D2560#${NAME}-${ISP}\n`;
     
