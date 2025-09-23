@@ -1,4 +1,4 @@
-name: 检查并重新部署 Appwrite Site (官方Action最终版)
+name: 检查并重新部署 Appwrite Site
 
 on:
   schedule:
@@ -9,7 +9,6 @@ jobs:
   cleanup-and-redeploy:
     runs-on: ubuntu-latest
     env:
-      # 将所有 secrets 放入环境变量，方便后续步骤复用
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
       APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
@@ -25,17 +24,17 @@ jobs:
           if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_CFSUB_PAT' 未设置！"; exit 1; fi
           echo "所有 Secrets 都已加载。"
 
-      - name: 安装 JQ
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: 安装 Appwrite CLI 和 JQ
+        run: |
+          npm install -g appwrite-cli
+          sudo apt-get update && sudo apt-get install -y jq
 
-      # 【核心修正】步骤 1: 使用官方 Action 设置 Appwrite CLI
-      - name: Setup Appwrite CLI
-        uses: appwrite/setup-for-appwrite@v3
-        with:
-          endpoint: ${{ env.APPWRITE_API_ENDPOINT }}
-          project: ${{ env.APPWRITE_PROJECT_ID }}
-          key: ${{ env.APPWRITE_API_KEY }}
-      
+      - name: Appwrite CLI 配置 (非交互式)
+        run: |
+          echo "正在使用 appwrite client 命令配置非交互式模式..."
+          appwrite client --endpoint "${APPWRITE_API_ENDPOINT}" --project-id "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}"
+          echo "Appwrite CLI 配置成功！"
+          
       - name: 验证 Appwrite CLI 连接
         run: |
           echo "正在验证与 Appwrite 项目的连接..."
