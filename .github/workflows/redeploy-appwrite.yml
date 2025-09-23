@@ -30,7 +30,7 @@ jobs:
 
       # 使用官方 Action 设置 Appwrite CLI
       - name: Setup Appwrite CLI
-        uses: appwrite/setup-for-appwrite@v2
+        uses: appwrite/setup-for-appwrite@v3
         with:
           endpoint: ${{ env.APPWRITE_API_ENDPOINT }}
           project: ${{ env.APPWRITE_PROJECT_ID }}
