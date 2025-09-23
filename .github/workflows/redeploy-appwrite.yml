@@ -1,4 +1,4 @@
-name: 检查并重新部署 Appwrite Site (CLI最终版)
+name: 检查并重新部署 Appwrite Site (双作业版)
 
 on:
   schedule:
@@ -6,8 +6,14 @@ on:
   workflow_dispatch: # 允许手动触发
 
 jobs:
-  check-and-redeploy:
+  # === 作业 1: 触发部署 ===
+  # 通过创建一个空的 git commit 来触发 Appwrite 的 git push 部署机制。
+  trigger-deployment:
     runs-on: ubuntu-latest
+    # 定义输出，以便将状态传递给下一个作业
+    outputs:
+      triggered: ${{ steps.push_commit.outputs.triggered }}
+      latest_id_before_push: ${{ steps.check_status.outputs.latest_id }}
     env:
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
@@ -22,71 +28,111 @@ jobs:
           if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
           if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_CFSUB_PAT' 未设置！"; exit 1; fi
-          echo "所有必要的 Secrets 都已加载。"
 
-      - name: 安装 Appwrite CLI
-        run: npm install -g appwrite-cli
+      - name: 安装 Appwrite CLI 和 JQ
+        run: |
+          npm install -g appwrite-cli
+          sudo apt-get update && sudo apt-get install -y jq
 
       - name: Appwrite CLI 配置
-        id: cli_setup
         run: |
-          # 【修正】使用正确的 kebab-case 参数
           appwrite client --endpoint "${APPWRITE_API_ENDPOINT}"
           appwrite client --project-id "${APPWRITE_PROJECT_ID}"
           appwrite client --key "${APPWRITE_API_KEY}"
-          echo "Appwrite CLI 配置成功！"
 
-      - name: 获取部署状态
-        id: get_status
+      - name: 检查部署状态并决定是否触发
+        id: check_status
         run: |
-          echo "正在获取部署列表 (使用 CLI)..."
-          # 【修正】使用 kebab-case 命令和参数
+          echo "正在获取部署列表..."
           DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
-          
-          FAILED_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "failed") | ."$id"')
-          BUILDING_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "building") | ."$id"')
+          LATEST_ID=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[0]."$id" // ""')
+          echo "latest_id=${LATEST_ID}" >> $GITHUB_OUTPUT
+
+          HAS_FAILED=$(echo "$DEPLOYMENTS_JSON" | jq -r 'any(.deployments[]; .status == "failed")')
           TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
-          
-          if [ -n "$FAILED_DEPLOYMENT_IDS" ] || [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
-            if [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
-              echo "没有发现任何部署，将触发首次部署。"
-            else
-              echo "发现一个或多个失败的部署。"
-            fi
-            FAILED_IDS_ONELINE=$(echo "$FAILED_DEPLOYMENT_IDS" | tr '\n' ' ')
-            BUILDING_IDS_ONELINE=$(echo "$BUILDING_DEPLOYMENT_IDS" | tr '\n' ' ')
-            echo "failed_ids=${FAILED_IDS_ONELINE}" >> $GITHUB_OUTPUT
-            echo "building_ids=${BUILDING_IDS_ONELINE}" >> $GITHUB_OUTPUT
-            echo "status=redeploy" >> $GITHUB_OUTPUT
-          elif [ -n "$BUILDING_DEPLOYMENT_IDS" ]; then
-            echo "正在部署中，ID(s)：${BUILDING_DEPLOYMENT_IDS}"
-            echo "status=building" >> $GITHUB_OUTPUT
+
+          if [ "$HAS_FAILED" == "true" ] || [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
+            echo "发现失败的部署或没有任何部署，将触发新部署。"
+            echo "should_trigger=true" >> $GITHUB_OUTPUT
           else
-            echo "没有发现失败或进行中的部署，状态正常。"
-            echo "status=ok" >> $GITHUB_OUTPUT
+            echo "状态正常，本次无需触发新部署。"
+            echo "should_trigger=false" >> $GITHUB_OUTPUT
           fi
-
-      - name: 触发新部署并清理
-        if: steps.get_status.outputs.status == 'redeploy'
-        run: |
-          # 1. 【修正】使用 kebab-case 命令和参数
-          echo "正在触发一次新的部署 (使用 CLI)..."
-          NEW_DEPLOYMENT_JSON=$(appwrite sites create-deployment --site-id "${APPWRITE_SITE_ID}" --activate --json --yes)
           
-          echo "--- Appwrite CLI 响应 ---"
-          echo "$NEW_DEPLOYMENT_JSON"
-          echo "--------------------------"
+      - name: 创建并推送空提交以触发部署
+        id: push_commit
+        if: steps.check_status.outputs.should_trigger == 'true'
+        run: |
+          echo "正在创建空提交来触发 Appwrite 部署..."
+          # 使用 PAT 检出代码，以便能够推送
+          git clone https://x-access-token:${GIT_CFSUB_PAT}@github.com/${{ github.repository }}.git .
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: Trigger Appwrite redeployment [skip ci]"
+          git push
+          echo "已成功推送空提交。"
+          echo "triggered=true" >> $GITHUB_OUTPUT
 
-          NEW_DEPLOYMENT_ID=$(echo "$NEW_DEPLOYMENT_JSON" | jq -r '."$id"')
-          if [ -z "$NEW_DEPLOYMENT_ID" ] || [ "$NEW_DEPLOYMENT_ID" == "null" ]; then
-            echo "::error::使用 CLI 触发新部署失败！请检查上面的响应以获取详细错误信息。"
+  # === 作业 2: 监控、提取和清理 ===
+  # 在作业1成功触发部署后运行。
+  monitor-and-update:
+    runs-on: ubuntu-latest
+    needs: trigger-deployment
+    # 仅当上一个作业确实触发了推送时才运行
+    if: needs.trigger-deployment.outputs.triggered == 'true'
+    env:
+      APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
+      APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
+      APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
+      APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
+      GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
+      LATEST_ID_BEFORE_PUSH: ${{ needs.trigger-deployment.outputs.latest_id_before_push }}
+
+    steps:
+      - name: 安装 Appwrite CLI 和 JQ
+        run: |
+          npm install -g appwrite-cli
+          sudo apt-get update && sudo apt-get install -y jq
+      
+      - name: Appwrite CLI 配置
+        run: |
+          appwrite client --endpoint "${APPWRITE_API_ENDPOINT}"
+          appwrite client --project-id "${APPWRITE_PROJECT_ID}"
+          appwrite client --key "${APPWRITE_API_KEY}"
+
+      - name: 等待新部署启动并获取ID
+        id: wait_for_deployment
+        run: |
+          NEW_DEPLOYMENT_ID=""
+          echo "正在等待由 git push 触发的新部署..."
+          # 循环等待2分钟 (12次 * 10秒)
+          for i in {1..12}; do
+            sleep 10
+            DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
+            # 获取最新的、状态为 building 的部署ID
+            CANDIDATE_ID=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "building") | ."$id"' | head -n 1)
+
+            if [ -n "$CANDIDATE_ID" ] && [ "$CANDIDATE_ID" != "${LATEST_ID_BEFORE_PUSH}" ]; then
+              NEW_DEPLOYMENT_ID=$CANDIDATE_ID
+              echo "已发现新的部署正在构建，ID: ${NEW_DEPLOYMENT_ID}"
+              echo "new_deployment_id=${NEW_DEPLOYMENT_ID}" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "等待中... (尝试次数: $i)"
+          done
+
+          if [ -z "$NEW_DEPLOYMENT_ID" ]; then
+            echo "::error::超时：在2分钟内未发现由 git push 触发的新部署。"
             exit 1
           fi
-          echo "已成功触发新部署，ID: ${NEW_DEPLOYMENT_ID}"
 
-          # 2. 轮询获取日志
-          echo "等待构建日志生成..."
+      - name: 轮询日志并提取节点信息
+        id: extract_node
+        run: |
+          NEW_DEPLOYMENT_ID="${{ steps.wait_for_deployment.outputs.new_deployment_id }}"
+          echo "等待构建日志生成 (部署ID: ${NEW_DEPLOYMENT_ID})..."
           BASE64_NODE=""
+          # 循环尝试100秒
           for i in {1..10}; do
             sleep 10
             echo "正在获取日志 (尝试次数: $i)..."
@@ -96,6 +142,7 @@ jobs:
             BASE64_NODE=$(echo "$LOGS_OUTPUT" | jq -r '.logs' | grep -oE '[A-Za-z0-9+/=]{200,}' | head -n 1)
             if [ -n "$BASE64_NODE" ]; then
               echo "已成功从日志中提取节点信息！"
+              echo "base64_node=${BASE64_NODE}" >> $GITHUB_OUTPUT
               break
             fi
           done
@@ -105,7 +152,9 @@ jobs:
             exit 1
           fi
 
-          # 3. 推送到另一个仓库
+      - name: 推送节点信息到 CFSub 仓库
+        run: |
+          BASE64_NODE="${{ steps.extract_node.outputs.base64_node }}"
           echo "正在将节点信息推送到 CFSub 仓库..."
           echo "$BASE64_NODE" > appwrite_base64.txt
           git clone https://x-access-token:${GIT_CFSUB_PAT}@github.com/yutian81/CFSub.git
@@ -122,23 +171,28 @@ jobs:
             echo "已成功将新节点信息推送到 CFSub 仓库。"
           fi
           cd ..
+          
+      - name: 清理旧的部署
+        run: |
+          NEW_DEPLOYMENT_ID="${{ steps.wait_for_deployment.outputs.new_deployment_id }}"
+          echo "正在清理所有旧的部署，保留最新部署: ${NEW_DEPLOYMENT_ID}"
+          
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
+          ALL_FAILED_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "failed") | ."$id"')
+          ALL_BUILDING_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "building") | ."$id"')
 
-          # 4. 【修正】使用 kebab-case 命令和参数
-          echo "正在清理所有旧的部署 (使用 CLI)..."
-          if [ -n "${{ steps.get_status.outputs.failed_ids }}" ]; then
-            for FAILED_ID in ${{ steps.get_status.outputs.failed_ids }}; do
-              echo "  - 正在删除失败的部署，ID: ${FAILED_ID}"
-              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${FAILED_ID}" --yes
+          if [ -n "$ALL_FAILED_IDS" ]; then
+            for ID in $ALL_FAILED_IDS; do
+              echo "  - 正在删除失败的部署，ID: ${ID}"
+              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --yes
             done
           fi
           
-          if [ -n "${{ steps.get_status.outputs.building_ids }}" ]; then
-            for BUILDING_ID in ${{ steps.get_status.outputs.building_ids }}; do
-              if [ "$BUILDING_ID" != "$NEW_DEPLOYMENT_ID" ]; then
-                echo "  - 正在删除旧的进行中部署，ID: ${BUILDING_ID}"
-                appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${BUILDING_ID}" --yes
-              else
-                echo "  - 跳过删除新创建的部署，ID: ${BUILDING_ID}"
+          if [ -n "$ALL_BUILDING_IDS" ]; then
+            for ID in $ALL_BUILDING_IDS; do
+              if [ "$ID" != "$NEW_DEPLOYMENT_ID" ]; then
+                echo "  - 正在删除旧的进行中部署，ID: ${ID}"
+                appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --yes
               fi
             done
           fi
