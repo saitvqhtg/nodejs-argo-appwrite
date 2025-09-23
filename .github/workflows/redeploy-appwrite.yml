@@ -30,9 +30,10 @@ jobs:
       - name: Appwrite CLI 配置
         id: cli_setup
         run: |
-          appwrite client --setEndpoint "${APPWRITE_API_ENDPOINT}"
-          appwrite client --setProject "${APPWRITE_PROJECT_ID}"
-          appwrite client --setKey "${APPWRITE_API_KEY}"
+          # 【最终修正】使用正确的 CLI 参数
+          appwrite client --endpoint "${APPWRITE_API_ENDPOINT}"
+          appwrite client --project "${APPWRITE_PROJECT_ID}"
+          appwrite client --key "${APPWRITE_API_KEY}"
           echo "Appwrite CLI 配置成功！"
 
       - name: 获取部署状态
