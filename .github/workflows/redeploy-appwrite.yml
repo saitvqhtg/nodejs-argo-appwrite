@@ -11,7 +11,6 @@ jobs:
     env:
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
-      APPWRITE_REPO_ID: ${{ secrets.APPWRITE_REPO_ID }}
       APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
       GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
@@ -21,7 +20,6 @@ jobs:
         run: |
           if [ -z "$APPWRITE_PROJECT_ID" ]; then echo "::error::Secret 'APPWRITE_PROJECT_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
-          if [ -z "$APPWRITE_REPO_ID" ]; then echo "::error::Secret 'APPWRITE_REPO_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
           if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_CFSUB_PAT' 未设置！"; exit 1; fi
           echo "所有必要的 Secrets 都已加载。"
@@ -62,16 +60,9 @@ jobs:
         run: |
           # 1. 触发新的部署
           echo "正在触发一次新的部署..."
-          # 【修正】使用正确的 API 请求格式，包含 providerRepositoryId
           NEW_DEPLOYMENT_JSON=$(curl --verbose --location --request POST "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments" \
-          --header "Content-Type: application/json" \
           --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
-          --header "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
-          --data-raw '{
-              "providerRepositoryId": "'"$APPWRITE_REPO_ID"'",
-              "providerBranch": "main",
-              "activate": true
-          }')
+          --header "X-Appwrite-Key: ${APPWRITE_API_KEY}")
           
           echo "--- Appwrite API 响应 ---"
           echo "$NEW_DEPLOYMENT_JSON"
