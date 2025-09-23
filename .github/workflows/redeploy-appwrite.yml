@@ -27,14 +27,18 @@ jobs:
       - name: 安装 Appwrite CLI
         run: npm install -g appwrite-cli
 
-      - name: Appwrite CLI 登录
-        run: appwrite login --endpoint "${APPWRITE_API_ENDPOINT}" --project "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}"
+      - name: Appwrite CLI 配置
+        id: cli_setup
+        run: |
+          appwrite client --setEndpoint "${APPWRITE_API_ENDPOINT}"
+          appwrite client --setProject "${APPWRITE_PROJECT_ID}"
+          appwrite client --setKey "${APPWRITE_API_KEY}"
+          echo "Appwrite CLI 配置成功！"
 
       - name: 获取部署状态
         id: get_status
         run: |
           echo "正在获取部署列表 (使用 CLI)..."
-          # 使用 Appwrite CLI 获取部署列表，并输出为 JSON 格式
           DEPLOYMENTS_JSON=$(appwrite sites listDeployments --siteId "${APPWRITE_SITE_ID}" --json)
           
           FAILED_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "failed") | ."$id"')
@@ -65,7 +69,6 @@ jobs:
         run: |
           # 1. 使用 Appwrite CLI 触发新的部署
           echo "正在触发一次新的部署 (使用 CLI)..."
-          # --yes 参数用于在非交互式环境中自动确认，--json 参数让输出为 JSON 格式，方便 jq 解析
           NEW_DEPLOYMENT_JSON=$(appwrite sites createDeployment --siteId "${APPWRITE_SITE_ID}" --activate --json --yes)
           
           echo "--- Appwrite CLI 响应 ---"
@@ -79,7 +82,7 @@ jobs:
           fi
           echo "已成功触发新部署，ID: ${NEW_DEPLOYMENT_ID}"
 
-          # 2. 轮询获取日志 (这部分仍然使用 curl，因为 CLI 没有直接获取构建日志的命令)
+          # 2. 轮询获取日志
           echo "等待构建日志生成..."
           BASE64_NODE=""
           for i in {1..10}; do
@@ -100,7 +103,7 @@ jobs:
             exit 1
           fi
 
-          # 3. 推送到另一个仓库 (逻辑不变)
+          # 3. 推送到另一个仓库
           echo "正在将节点信息推送到 CFSub 仓库..."
           echo "$BASE64_NODE" > appwrite_base64.txt
           git clone https://x-access-token:${GIT_CFSUB_PAT}@github.com/yutian81/CFSub.git
