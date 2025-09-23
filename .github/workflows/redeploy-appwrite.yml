@@ -76,7 +76,7 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          echo "Triggered at $(TZ='Asia/Shanghai' date)" > version.txt   
+          TZ='Asia/Shanghai' date +'%Y-%m-%d-%H:%M:%S' > version.txt
           git add version.txt
           git commit -m "chore: Appwrite auto-deployment"
           git push
