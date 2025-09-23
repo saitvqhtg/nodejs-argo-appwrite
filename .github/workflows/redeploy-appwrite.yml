@@ -1,4 +1,4 @@
-name: 检查并重新部署 Appwrite Site
+name: 检查并通过 Git Push 重新部署 Appwrite Site
 
 on:
   schedule:
@@ -13,7 +13,7 @@ jobs:
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
       APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
-      GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
       - name: 检查环境变量
@@ -21,7 +21,7 @@ jobs:
           if [ -z "$APPWRITE_PROJECT_ID" ]; then echo "::error::Secret 'APPWRITE_PROJECT_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
-          if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_SOURCE_REPO_PAT' 未设置！"; exit 1; fi
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::Secret 'GIT_PAT' 未设置！"; exit 1; fi
           echo "所有 Secrets 都已加载。"
 
       - name: 安装 Appwrite CLI 和 JQ
@@ -29,16 +29,16 @@ jobs:
           npm install -g appwrite-cli
           sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Appwrite CLI 配置 (非交互式)
+      - name: Appwrite CLI 登录配置
         run: |
           appwrite client --endpoint "${APPWRITE_API_ENDPOINT}" --project-id "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}" --self-signed true
-          echo "Appwrite CLI 配置成功！"
+          echo "Appwrite CLI 登录成功！"
 
       - name: 检查状态并决定是否重新部署
         id: check_status
         run: |
           echo "正在获取部署列表..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --project-id "${APPWRITE_PROJECT_ID}" --json)
           
           HAS_FAILED=$(echo "$DEPLOYMENTS_JSON" | jq -r 'any(.deployments[]; .status == "failed")')
           TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
@@ -55,57 +55,36 @@ jobs:
             echo "should_redeploy=false" >> $GITHUB_OUTPUT
           fi
 
+      # 只有在需要重新部署时才运行以下步骤
       - name: 检出 Appwrite 源仓库
         if: steps.check_status.outputs.should_redeploy == 'true'
         uses: actions/checkout@v4
         with:
-          token: ${{ env.GIT_CFSUB_PAT }}
+          token: ${{ env.GITHUB_TOKEN }}
 
-      - name: 清理并触发新部署
+      - name: 清理旧部署并通过 Git Push 触发新部署
         if: steps.check_status.outputs.should_redeploy == 'true'
         run: |
-          # 1. 清理所有现有部署
           echo "正在清理所有现有部署..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --project-id "${APPWRITE_PROJECT_ID}" --json)
           ALL_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[]."$id"')
           if [ -n "$ALL_DEPLOYMENT_IDS" ]; then
             for ID in $ALL_DEPLOYMENT_IDS; do
-              echo "  - 正在删除部署，ID: ${ID}"
-              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --force
+              echo "正在删除部署，ID: ${ID}"
+              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --project-id "${APPWRITE_PROJECT_ID}" --force
             done
             echo "已完成所有旧部署的清理。"
           else
             echo "没有需要清理的部署。"
           fi
           
-          # 2. 通过 Git Push 触发新的部署 (使用北京时间)
           echo "正在通过 Git Push 触发新的部署..."
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # 设置时区为 Asia/Shanghai (UTC+8) 并写入格式化的时间戳
-          echo "Triggered at $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S %Z')" > version.txt
-          git add version.txt
-          git commit -m "chore: Trigger Appwrite auto-deployment"
-          git push
-          echo "Commit 已推送，等待 Appwrite 启动新部署..."
           
-          # 3. 轮询并确认新部署已创建
-          sleep 30 # 等待 Appwrite 响应 webhook 并创建部署记录
-          NEW_DEPLOYMENT_ID=""
-          echo "正在轮询获取新部署的 ID..."
-          for i in {1..10}; do
-            DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
-            LATEST_ID=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[0]."$id"')
-            if [ -n "$LATEST_ID" ] && [ "$LATEST_ID" != "null" ]; then
-              NEW_DEPLOYMENT_ID=$LATEST_ID
-              echo "✅ 已成功触发并获取到新部署 ID: ${NEW_DEPLOYMENT_ID}"
-              break
-            fi
-            echo "尚未获取到新部署 ID，10秒后重试... (尝试次数: $i)"
-            sleep 10
-          done
-
-          if [ -z "$NEW_DEPLOYMENT_ID" ]; then
-            echo "::error::超时：在130秒内未能获取到新的部署ID。"
-            exit 1
-          fi
+          # 创建并提交时间戳文件
+          echo "Triggered at $(TZ='Asia/Shanghai' date)" > version.txt   
+          git add version.txt
+          git commit -m "chore: Appwrite auto-deployment"
+          git push
+          echo "Commit 已推送，Appwrite 将会自动拉取并开始新的部署。"
