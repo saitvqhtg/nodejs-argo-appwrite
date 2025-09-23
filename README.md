@@ -8,6 +8,12 @@
 - 框架: 选 `other`
 - 安装命令: `npm install`
 - 构建命令: `npm run build && npm run start`
+- 设置环境变量
+  - UUID
+  - ARGO_DOMAIN
+  - ARGO_AUTH
+  - NEZHA_SERVER
+  - NEZHA_KEY
 
 ## 保活
 
