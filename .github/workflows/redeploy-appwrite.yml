@@ -17,6 +17,15 @@ jobs:
       GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
 
     steps:
+      - name: 检查环境变量
+        run: |
+          if [ -z "$APPWRITE_PROJECT_ID" ]; then echo "::error::Secret 'APPWRITE_PROJECT_ID' 未设置！"; exit 1; fi
+          if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
+          if [ -z "$APPWRITE_REPO_ID" ]; then echo "::error::Secret 'APPWRITE_REPO_ID' 未设置！"; exit 1; fi
+          if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
+          if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_CFSUB_PAT' 未设置！"; exit 1; fi
+          echo "所有必要的 Secrets 都已加载。"
+
       - name: 获取部署状态
         id: get_status
         run: |
@@ -40,7 +49,6 @@ jobs:
             else
               echo "发现一个或多个失败的部署。"
             fi
-            # 将所有需要清理的ID转换为单行，用作下一步的输入
             FAILED_IDS_ONELINE=$(echo "$FAILED_DEPLOYMENT_IDS" | tr '\n' ' ')
             BUILDING_IDS_ONELINE=$(echo "$BUILDING_DEPLOYMENT_IDS" | tr '\n' ' ')
             echo "failed_ids=${FAILED_IDS_ONELINE}" >> $GITHUB_OUTPUT
@@ -59,7 +67,8 @@ jobs:
         run: |
           # 1. 触发新的部署
           echo "正在触发一次新的部署..."
-          NEW_DEPLOYMENT_JSON=$(curl -s --location --request POST "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments" \
+          # 【调试修改】移除了 -s 参数，并增加了详细输出
+          NEW_DEPLOYMENT_JSON=$(curl --verbose --location --request POST "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments" \
           --header "Content-Type: application/json" \
           --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
           --header "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
@@ -69,13 +78,19 @@ jobs:
               "activate": true
           }')
           
+          # 【调试修改】打印出 Appwrite API 的原始响应
+          echo "--- Appwrite API 响应 ---"
+          echo "$NEW_DEPLOYMENT_JSON"
+          echo "--------------------------"
+
           NEW_DEPLOYMENT_ID=$(echo "$NEW_DEPLOYMENT_JSON" | jq -r '."$id"')
           if [ -z "$NEW_DEPLOYMENT_ID" ] || [ "$NEW_DEPLOYMENT_ID" == "null" ]; then
-            echo "::error::触发新部署失败！"
+            echo "::error::触发新部署失败！请检查上面的 API 响应以获取详细错误信息。"
             exit 1
           fi
           echo "已成功触发新部署，ID: ${NEW_DEPLOYMENT_ID}"
 
+          # ... 后续步骤保持不变 ...
           # 2. 轮询获取新部署的日志并提取节点信息
           echo "等待构建日志生成..."
           BASE64_NODE=""
@@ -117,7 +132,6 @@ jobs:
 
           # 4. 删除所有旧的、失败的和进行中的部署
           echo "正在清理所有旧的部署..."
-          # 4.1 删除所有失败的部署
           if [ -n "${{ steps.get_status.outputs.failed_ids }}" ]; then
             for FAILED_ID in ${{ steps.get_status.outputs.failed_ids }}; do
               echo "  - 正在删除失败的部署，ID: ${FAILED_ID}"
@@ -127,10 +141,8 @@ jobs:
             done
           fi
           
-          # 4.2 删除所有旧的、进行中的部署
           if [ -n "${{ steps.get_status.outputs.building_ids }}" ]; then
             for BUILDING_ID in ${{ steps.get_status.outputs.building_ids }}; do
-              # 关键：判断是否是刚刚触发的新部署，如果不是，则删除
               if [ "$BUILDING_ID" != "$NEW_DEPLOYMENT_ID" ]; then
                 echo "  - 正在删除旧的进行中部署，ID: ${BUILDING_ID}"
                 curl -s --location --request DELETE "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${BUILDING_ID}" \
@@ -142,3 +154,4 @@ jobs:
             done
           fi
           echo "已完成旧部署的清理。"
+
