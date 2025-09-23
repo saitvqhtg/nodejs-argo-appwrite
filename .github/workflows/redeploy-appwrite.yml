@@ -60,9 +60,14 @@ jobs:
         run: |
           # 1. 触发新的部署
           echo "正在触发一次新的部署..."
+          # 【最终修正】根据API错误 "Param \"activate\" is not optional."，在请求体中加入此参数
           NEW_DEPLOYMENT_JSON=$(curl --verbose --location --request POST "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments" \
+          --header "Content-Type: application/json" \
           --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
-          --header "X-Appwrite-Key: ${APPWRITE_API_KEY}")
+          --header "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
+          --data-raw '{
+              "activate": false
+          }')
           
           echo "--- Appwrite API 响应 ---"
           echo "$NEW_DEPLOYMENT_JSON"
