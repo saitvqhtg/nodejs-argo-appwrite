@@ -12,7 +12,7 @@ jobs:
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
       APPWRITE_REPO_ID: ${{ secrets.APPWRITE_REPO_ID }}
-      APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT }}
+      APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
       GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
 
@@ -28,19 +28,31 @@ jobs:
           # 查找所有失败部署的ID
           FAILED_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "failed") | ."$id"')
           
-          if [ -n "$FAILED_DEPLOYMENT_IDS" ]; then
-            echo "发现一个或多个失败的部署。"
-            # 将所有失败的ID转换为单行，用作下一步的输入
+          # 查找进行中的部署
+          BUILDING_DEPLOYMENT_ID=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "building") | ."$id"' | head -n 1)
+
+          # 获取部署总数
+          TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
+          
+          if [ -n "$FAILED_DEPLOYMENT_IDS" ] || [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
+            if [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
+              echo "没有发现任何部署，将触发首次部署。"
+            else
+              echo "发现一个或多个失败的部署。"
+            fi
             FAILED_IDS_ONELINE=$(echo "$FAILED_DEPLOYMENT_IDS" | tr '\n' ' ')
             echo "failed_ids=${FAILED_IDS_ONELINE}" >> $GITHUB_OUTPUT
-            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "status=redeploy" >> $GITHUB_OUTPUT
+          elif [ -n "$BUILDING_DEPLOYMENT_ID" ]; then
+            echo "正在部署中，ID：${BUILDING_DEPLOYMENT_ID}"
+            echo "status=building" >> $GITHUB_OUTPUT
           else
-            echo "没有发现失败的部署，状态正常。"
+            echo "没有发现失败或进行中的部署，状态正常。"
             echo "status=ok" >> $GITHUB_OUTPUT
           fi
 
-      - name: 处理失败的部署
-        if: steps.get_status.outputs.status == 'failed'
+      - name: 触发新部署并清理
+        if: steps.get_status.outputs.status == 'redeploy'
         run: |
           # 1. 触发新的部署
           echo "正在触发一次新的部署..."
@@ -107,12 +119,14 @@ jobs:
           fi
           cd ..
 
-          # 4. 删除所有旧的、失败的部署
-          echo "正在删除所有失败的部署..."
-          for FAILED_ID in ${{ steps.get_status.outputs.failed_ids }}; do
-            echo "正在删除失败的部署，ID: ${FAILED_ID}"
-            curl --location --request DELETE "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${FAILED_ID}" \
-            --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
-            --header "X-Appwrite-Key: ${APPWRITE_API_KEY}"
-          done
-          echo "已删除所有失败的部署。"
+          # 4. 删除所有旧的、失败的部署（如果存在）
+          if [ -n "${{ steps.get_status.outputs.failed_ids }}" ]; then
+            echo "正在删除所有失败的部署..."
+            for FAILED_ID in ${{ steps.get_status.outputs.failed_ids }}; do
+              echo "正在删除失败的部署，ID: ${FAILED_ID}"
+              curl --location --request DELETE "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${FAILED_ID}" \
+              --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
+              --header "X-Appwrite-Key: ${APPWRITE_API_KEY}"
+            done
+            echo "已删除所有失败的部署。"
+          fi
