@@ -31,7 +31,7 @@ jobs:
 
       - name: Appwrite CLI 登录
         run: |
-          appwrite login --endpoint "${APPWRITE_ENDPOINT}" --project-id "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}"
+          appwrite login --endpoint "${APPWRITE_ENDPOINT}" --projectId "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}"
           echo "Appwrite CLI 登录并配置成功！"
 
       - name: 检查状态并决定是否重新部署
