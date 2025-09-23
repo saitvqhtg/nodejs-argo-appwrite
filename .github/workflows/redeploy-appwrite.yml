@@ -32,7 +32,7 @@ jobs:
         run: |
           # 【最终修正】使用正确的 CLI 参数
           appwrite client --endpoint "${APPWRITE_API_ENDPOINT}"
-          appwrite client --project "${APPWRITE_PROJECT_ID}"
+          appwrite client --project-id "${APPWRITE_PROJECT_ID}"
           appwrite client --key "${APPWRITE_API_KEY}"
           echo "Appwrite CLI 配置成功！"
 
