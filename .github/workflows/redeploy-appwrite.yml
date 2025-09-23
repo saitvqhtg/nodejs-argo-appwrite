@@ -47,7 +47,7 @@ jobs:
             echo "正在删除所有现有部署..."
             for ID in $ALL_DEPLOYMENT_IDS; do
               echo "  - 正在删除部署，ID: ${ID}"
-              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --yes
+              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --force
             done
             echo "已完成所有旧部署的清理。"
           fi
