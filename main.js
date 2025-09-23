@@ -21,9 +21,9 @@ const NEZHA_KEY = process.env.NEZHA_KEY || '';
 const ARGO_DOMAIN = process.env.ARGO_DOMAIN || '';
 const ARGO_AUTH = process.env.ARGO_AUTH || '';
 const ARGO_PORT = process.env.ARGO_PORT || 8001;
-const CFIP = process.env.CFIP || 'www.visa.com.sg';
+const CFIP = process.env.CFIP || 'cf.090227.xyz';
 const CFPORT = process.env.CFPORT || 443;
-const NAME = process.env.NAME || 'Vls';
+const NAME = process.env.NAME || 'AppWrite';
 
 // 路径定义
 const subPath = path.join(FILE_PATH, 'sub.txt');
