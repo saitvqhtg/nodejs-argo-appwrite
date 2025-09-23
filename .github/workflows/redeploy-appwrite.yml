@@ -1,4 +1,4 @@
-name: 检查并重新部署 Appwrite Site
+name: 检查并重新部署 Appwrite Site (官方Action最终版)
 
 on:
   schedule:
@@ -9,7 +9,7 @@ jobs:
   cleanup-and-redeploy:
     runs-on: ubuntu-latest
     env:
-      # 将所有 secrets 放入环境变量，方便复用
+      # 将所有 secrets 放入环境变量，方便后续步骤复用
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
       APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
@@ -28,15 +28,13 @@ jobs:
       - name: 安装 JQ
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 使用官方 Action 设置 Appwrite CLI
+      # 【核心修正】步骤 1: 使用官方 Action 设置 Appwrite CLI
       - name: Setup Appwrite CLI
-        uses: appwrite/setup-for-appwrite@v2
+        uses: appwrite/setup-for-appwrite@v3
         with:
-          method: key
           endpoint: ${{ env.APPWRITE_API_ENDPOINT }}
           project: ${{ env.APPWRITE_PROJECT_ID }}
           key: ${{ env.APPWRITE_API_KEY }}
-          force: true
       
       - name: 验证 Appwrite CLI 连接
         run: |
@@ -100,7 +98,6 @@ jobs:
           for i in {1..10}; do # 循环尝试100秒
             sleep 10
             echo "正在获取日志 (尝试次数: $i)..."
-            # 这里我们仍然可以使用 curl，因为它简单直接
             LOGS_OUTPUT=$(curl -s --location --request GET "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${NEW_DEPLOYMENT_ID}/builds/1/logs" \
             --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
             --header "X-Appwrite-Key: ${APPWRITE_API_KEY}")
@@ -119,7 +116,6 @@ jobs:
           # 4. 推送到另一个仓库
           echo "正在将节点信息推送到 CFSub 仓库..."
           echo "$BASE64_NODE" > appwrite_base64.txt
-          # 使用 actions/checkout 来确保 git 命令可用
           git clone https://x-access-token:${GIT_CFSUB_PAT}@github.com/yutian81/CFSub.git cfsub_repo
           mv appwrite_base64.txt cfsub_repo/nodes/
           cd cfsub_repo
