@@ -29,15 +29,17 @@ jobs:
           npm install -g appwrite-cli
           sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Appwrite CLI 配置 (非交互式)
+        run: |
+          echo "正在使用 appwrite client 命令配置非交互式模式..."
+          appwrite client --endpoint "${APPWRITE_API_ENDPOINT}" --project-id "${APPWRITE_PROJECT_ID}" --key "${APPWRITE_API_KEY}" --self-signed true
+          echo "Appwrite CLI 配置成功！"
+
       - name: 检查状态并决定是否重新部署
         id: check_status
         run: |
           echo "正在获取部署列表..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments \
-            --endpoint "${APPWRITE_API_ENDPOINT}" \
-            --project-id "${APPWRITE_PROJECT_ID}" \
-            --key "${APPWRITE_API_KEY}" \
-            --site-id "${APPWRITE_SITE_ID}" --json)
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
           
           HAS_FAILED=$(echo "$DEPLOYMENTS_JSON" | jq -r 'any(.deployments[]; .status == "failed")')
           TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
@@ -59,22 +61,12 @@ jobs:
         run: |
           # 1. 清理所有现有部署
           echo "正在清理所有现有部署..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments \
-            --endpoint "${APPWRITE_API_ENDPOINT}" \
-            --project-id "${APPWRITE_PROJECT_ID}" \
-            --key "${APPWRITE_API_KEY}" \
-            --site-id "${APPWRITE_SITE_ID}" --json)
-            
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
           ALL_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[]."$id"')
           if [ -n "$ALL_DEPLOYMENT_IDS" ]; then
             for ID in $ALL_DEPLOYMENT_IDS; do
               echo "  - 正在删除部署，ID: ${ID}"
-              appwrite sites delete-deployment \
-                --endpoint "${APPWRITE_API_ENDPOINT}" \
-                --project-id "${APPWRITE_PROJECT_ID}" \
-                --key "${APPWRITE_API_KEY}" \
-                --site-id "${APPWRITE_SITE_ID}" \
-                --deployment-id "${ID}" --force
+              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --force
             done
             echo "已完成所有旧部署的清理。"
           else
@@ -83,13 +75,7 @@ jobs:
           
           # 2. 直接使用 CLI 触发基于 Git 的新部署
           echo "正在直接触发一次新的 Git 部署 (使用 CLI)..."
-          NEW_DEPLOYMENT_JSON=$(appwrite sites create-deployment \
-            --endpoint "${APPWRITE_API_ENDPOINT}" \
-            --project-id "${APPWRITE_PROJECT_ID}" \
-            --key "${APPWRITE_API_KEY}" \
-            --site-id "${APPWRITE_SITE_ID}" \
-            --activate --json --force)
-            
+          NEW_DEPLOYMENT_JSON=$(appwrite sites create-deployment --site-id "${APPWRITE_SITE_ID}" --activate --json --force)
           NEW_DEPLOYMENT_ID=$(echo "$NEW_DEPLOYMENT_JSON" | jq -r '."$id"')
           
           if [ -z "$NEW_DEPLOYMENT_ID" ] || [ "$NEW_DEPLOYMENT_ID" == "null" ]; then
@@ -105,6 +91,7 @@ jobs:
           for i in {1..10}; do # 循环尝试100秒
             sleep 10
             echo "正在获取日志 (尝试次数: $i)..."
+            # 注意：这里的 curl 仍然需要手动传递 Project 和 Key Header，因为它不是 CLI 命令
             LOGS_OUTPUT=$(curl -s --location --request GET "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${NEW_DEPLOYMENT_ID}/builds/1/logs" \
             --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
             --header "X-Appwrite-Key: ${APPWRITE_API_KEY}")
