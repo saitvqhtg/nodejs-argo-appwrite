@@ -1,4 +1,4 @@
-name: 检查并重新部署 Appwrite Site (CLI版)
+name: 检查并重新部署 Appwrite Site (CLI最终版)
 
 on:
   schedule:
@@ -30,7 +30,7 @@ jobs:
       - name: Appwrite CLI 配置
         id: cli_setup
         run: |
-          # 【最终修正】使用正确的 CLI 参数
+          # 【修正】使用正确的 kebab-case 参数
           appwrite client --endpoint "${APPWRITE_API_ENDPOINT}"
           appwrite client --project-id "${APPWRITE_PROJECT_ID}"
           appwrite client --key "${APPWRITE_API_KEY}"
@@ -40,6 +40,7 @@ jobs:
         id: get_status
         run: |
           echo "正在获取部署列表 (使用 CLI)..."
+          # 【修正】使用 kebab-case 命令和参数
           DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
           
           FAILED_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "failed") | ."$id"')
@@ -68,9 +69,9 @@ jobs:
       - name: 触发新部署并清理
         if: steps.get_status.outputs.status == 'redeploy'
         run: |
-          # 1. 使用 Appwrite CLI 触发新的部署
+          # 1. 【修正】使用 kebab-case 命令和参数
           echo "正在触发一次新的部署 (使用 CLI)..."
-          NEW_DEPLOYMENT_JSON=$(appwrite sites createDeployment --siteId "${APPWRITE_SITE_ID}" --activate --json --yes)
+          NEW_DEPLOYMENT_JSON=$(appwrite sites create-deployment --site-id "${APPWRITE_SITE_ID}" --activate --json --yes)
           
           echo "--- Appwrite CLI 响应 ---"
           echo "$NEW_DEPLOYMENT_JSON"
@@ -122,12 +123,12 @@ jobs:
           fi
           cd ..
 
-          # 4. 使用 Appwrite CLI 清理旧部署
+          # 4. 【修正】使用 kebab-case 命令和参数
           echo "正在清理所有旧的部署 (使用 CLI)..."
           if [ -n "${{ steps.get_status.outputs.failed_ids }}" ]; then
             for FAILED_ID in ${{ steps.get_status.outputs.failed_ids }}; do
               echo "  - 正在删除失败的部署，ID: ${FAILED_ID}"
-              appwrite sites deleteDeployment --siteId "${APPWRITE_SITE_ID}" --deploymentId "${FAILED_ID}" --yes
+              appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${FAILED_ID}" --yes
             done
           fi
           
@@ -135,7 +136,7 @@ jobs:
             for BUILDING_ID in ${{ steps.get_status.outputs.building_ids }}; do
               if [ "$BUILDING_ID" != "$NEW_DEPLOYMENT_ID" ]; then
                 echo "  - 正在删除旧的进行中部署，ID: ${BUILDING_ID}"
-                appwrite sites deleteDeployment --siteId "${APPWRITE_SITE_ID}" --deploymentId "${BUILDING_ID}" --yes
+                appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${BUILDING_ID}" --yes
               else
                 echo "  - 跳过删除新创建的部署，ID: ${BUILDING_ID}"
               fi
