@@ -1,4 +1,4 @@
-name: 检查并重新部署 Appwrite Site (清理重建版)
+name: 检查并重新部署 Appwrite Site
 
 on:
   schedule:
@@ -8,10 +8,11 @@ on:
 jobs:
   cleanup-and-redeploy:
     runs-on: ubuntu-latest
+    # 设置环境变量
     env:
+      APPWRITE_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
-      APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
       GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
 
@@ -22,111 +23,95 @@ jobs:
           if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
           if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_CFSUB_PAT' 未设置！"; exit 1; fi
+          echo "所有 Secrets 都已加载，CLI 将自动使用它们。"
 
       - name: 安装 Appwrite CLI 和 JQ
         run: |
           npm install -g appwrite-cli
           sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Appwrite CLI 配置
+      - name: 检查状态并决定是否重新部署
+        id: check_status
         run: |
-          appwrite client --endpoint "${APPWRITE_API_ENDPOINT}"
-          appwrite client --project-id "${APPWRITE_PROJECT_ID}"
-          appwrite client --key "${APPWRITE_API_KEY}"
+          echo "正在获取部署列表..."
+          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
+          
+          HAS_FAILED=$(echo "$DEPLOYMENTS_JSON" | jq -r 'any(.deployments[]; .status == "failed")')
+          TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
 
-      # 步骤 1: 删除所有现有部署
-      - name: 清理所有现有部署
+          if [ "$HAS_FAILED" == "true" ] || [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
+            if [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
+              echo "没有发现任何部署，将触发首次部署。"
+            else
+              echo "发现一个或多个失败的部署。"
+            fi
+            echo "should_redeploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "状态正常，本次无需触发新部署。"
+            echo "should_redeploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 触发新部署、提取日志并清理
+        if: steps.check_status.outputs.should_redeploy == 'true'
         run: |
-          echo "正在获取所有部署列表以进行清理..."
+          # 1. 清理所有现有部署
+          echo "正在清理所有现有部署..."
           DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
           ALL_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[]."$id"')
-
-          if [ -z "$ALL_DEPLOYMENT_IDS" ]; then
-            echo "没有需要清理的部署。"
-          else
-            echo "正在删除所有现有部署..."
+          if [ -n "$ALL_DEPLOYMENT_IDS" ]; then
             for ID in $ALL_DEPLOYMENT_IDS; do
               echo "  - 正在删除部署，ID: ${ID}"
               appwrite sites delete-deployment --site-id "${APPWRITE_SITE_ID}" --deployment-id "${ID}" --force
             done
             echo "已完成所有旧部署的清理。"
+          else
+            echo "没有需要清理的部署。"
           fi
-
-      # 步骤 2: 创建新文件并推送以触发新部署
-      - name: 使用 PAT 检出代码
-        uses: actions/checkout@v4
-        with:
-          token: ${{ env.GIT_CFSUB_PAT }}
           
-      - name: 创建版本文件并推送
-        run: |
-          echo "正在创建版本文件来触发 Appwrite 部署..."
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 2. 触发基于 Git 的新部署
+          echo "正在直接触发一次新的 Git 部署 (使用 CLI)..."
+          # 注意：对于Git部署，create-deployment 命令不需要额外参数
+          NEW_DEPLOYMENT_JSON=$(appwrite sites create-deployment --site-id "${APPWRITE_SITE_ID}" --activate --json --force)
+          NEW_DEPLOYMENT_ID=$(echo "$NEW_DEPLOYMENT_JSON" | jq -r '."$id"')
           
-          BEIJING_TIME=$(TZ='Asia/Shanghai' date +'%Y-%m-%d-%H:%M:%S')
-          echo "当前北京时间: $BEIJING_TIME"
-          echo "$BEIJING_TIME" > version.txt
-          
-          git add version.txt
-          git commit -m "chore: 触发 Appwrite 部署 [${BEIJING_TIME}]"
-          git push
-          echo "已成功推送新版本文件。"
-
-      # 步骤 3: 等待并提取日志
-      - name: 等待、获取日志并提取节点信息
-        id: extract_node
-        run: |
-          echo "等待2分钟，以便 Appwrite 开始新的部署..."
-          sleep 120
-
-          echo "正在获取最新部署的日志..."
-          DEPLOYMENTS_JSON=$(appwrite sites list-deployments --site-id "${APPWRITE_SITE_ID}" --json)
-          LATEST_DEPLOYMENT_ID=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[0]."$id"')
-
-          if [ -z "$LATEST_DEPLOYMENT_ID" ] || [ "$LATEST_DEPLOYMENT_ID" == "null" ]; then
-            echo "::error::在等待后未能找到任何新的部署。"
+          if [ -z "$NEW_DEPLOYMENT_ID" ] || [ "$NEW_DEPLOYMENT_ID" == "null" ]; then
+            echo "::error::使用 CLI 触发新部署失败！"
+            echo "API 响应: $NEW_DEPLOYMENT_JSON"
             exit 1
           fi
-          echo "最新部署的ID是: ${LATEST_DEPLOYMENT_ID}"
+          echo "已成功触发新部署，ID: ${NEW_DEPLOYMENT_ID}"
 
-          # 轮询获取日志 (最多尝试1分钟)
+          # 3. 轮询获取日志并提取节点信息
+          echo "等待构建日志生成..."
           BASE64_NODE=""
-          for i in {1..6}; do
-            LOGS_OUTPUT=$(curl -s --location --request GET "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${LATEST_DEPLOYMENT_ID}/builds/1/logs" \
+          for i in {1..10}; do # 循环尝试100秒
+            sleep 10
+            echo "正在获取日志 (尝试次数: $i)..."
+            # 这里我们仍然可以使用 curl，因为它简单直接
+            LOGS_OUTPUT=$(curl -s --location --request GET "${APPWRITE_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments/${NEW_DEPLOYMENT_ID}/builds/1/logs" \
             --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
             --header "X-Appwrite-Key: ${APPWRITE_API_KEY}")
             BASE64_NODE=$(echo "$LOGS_OUTPUT" | jq -r '.logs' | grep -oE '[A-Za-z0-9+/=]{200,}' | head -n 1)
             if [ -n "$BASE64_NODE" ]; then
               echo "已成功从日志中提取节点信息！"
-              echo "base64_node=${BASE64_NODE}" >> $GITHUB_OUTPUT
               break
             fi
-            echo "日志尚未准备就绪，10秒后重试... (尝试次数: $i)"
-            sleep 10
           done
 
           if [ -z "$BASE64_NODE" ]; then
-            echo "::error::超时：在等待后未能从最新部署的日志中提取到节点信息。"
+            echo "::error::超时：在100秒内未能从日志中提取到节点信息。"
             exit 1
           fi
 
-      # 步骤 4: 推送节点信息到另一个仓库
-      - name: 推送节点信息到 CFSub 仓库
-        run: |
-          BASE64_NODE="${{ steps.extract_node.outputs.base64_node }}"
+          # 4. 推送到另一个仓库
           echo "正在将节点信息推送到 CFSub 仓库..."
           echo "$BASE64_NODE" > appwrite_base64.txt
-          
-          # 克隆目标仓库到一个独立的文件夹
           git clone https://x-access-token:${GIT_CFSUB_PAT}@github.com/yutian81/CFSub.git cfsub_repo
-          
           mv appwrite_base64.txt cfsub_repo/nodes/
           cd cfsub_repo
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add nodes/appwrite_base64.txt
-          
           if git diff --staged --quiet; then
             echo "节点信息无变化，无需推送。"
           else
