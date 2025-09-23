@@ -1,4 +1,4 @@
-name: 检查并通过 Git Push 重新部署 Appwrite Site
+name: 自动部署 Appwrite Site
 
 on:
   schedule:
