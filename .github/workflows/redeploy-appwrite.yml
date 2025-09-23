@@ -11,7 +11,6 @@ jobs:
     env:
       APPWRITE_PROJECT_ID: ${{ secrets.APPWRITE_PROJECT_ID }}
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
-      APPWRITE_REPO_ID: ${{ secrets.APPWRITE_REPO_ID }}
       APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
       GIT_CFSUB_PAT: ${{ secrets.GIT_CFSUB_PAT }}
@@ -21,7 +20,6 @@ jobs:
         run: |
           if [ -z "$APPWRITE_PROJECT_ID" ]; then echo "::error::Secret 'APPWRITE_PROJECT_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_SITE_ID" ]; then echo "::error::Secret 'APPWRITE_SITE_ID' 未设置！"; exit 1; fi
-          if [ -z "$APPWRITE_REPO_ID" ]; then echo "::error::Secret 'APPWRITE_REPO_ID' 未设置！"; exit 1; fi
           if [ -z "$APPWRITE_API_KEY" ]; then echo "::error::Secret 'APPWRITE_API_KEY' 未设置！"; exit 1; fi
           if [ -z "$GIT_CFSUB_PAT" ]; then echo "::error::Secret 'GIT_CFSUB_PAT' 未设置！"; exit 1; fi
           echo "所有必要的 Secrets 都已加载。"
@@ -34,13 +32,8 @@ jobs:
           --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
           --header "X-Appwrite-Key: ${APPWRITE_API_KEY}")
           
-          # 查找所有失败部署的ID
           FAILED_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "failed") | ."$id"')
-          
-          # 查找所有进行中部署的ID
           BUILDING_DEPLOYMENT_IDS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.deployments[] | select(.status == "building") | ."$id"')
-
-          # 获取部署总数
           TOTAL_DEPLOYMENTS=$(echo "$DEPLOYMENTS_JSON" | jq -r '.total')
           
           if [ -n "$FAILED_DEPLOYMENT_IDS" ] || [ "$TOTAL_DEPLOYMENTS" -eq 0 ]; then
@@ -67,18 +60,14 @@ jobs:
         run: |
           # 1. 触发新的部署
           echo "正在触发一次新的部署..."
-          # 【调试修改】移除了 -s 参数，并增加了详细输出
           NEW_DEPLOYMENT_JSON=$(curl --verbose --location --request POST "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments" \
           --header "Content-Type: application/json" \
           --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
           --header "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
           --data-raw '{
-              "providerRepositoryId": "'"$APPWRITE_REPO_ID"'",
-              "providerBranch": "main",
               "activate": true
           }')
           
-          # 【调试修改】打印出 Appwrite API 的原始响应
           echo "--- Appwrite API 响应 ---"
           echo "$NEW_DEPLOYMENT_JSON"
           echo "--------------------------"
@@ -91,7 +80,6 @@ jobs:
           echo "已成功触发新部署，ID: ${NEW_DEPLOYMENT_ID}"
 
           # ... 后续步骤保持不变 ...
-          # 2. 轮询获取新部署的日志并提取节点信息
           echo "等待构建日志生成..."
           BASE64_NODE=""
           for i in {1..10}; do
@@ -112,7 +100,6 @@ jobs:
             exit 1
           fi
 
-          # 3. 将节点信息写入文件并推送到另一个仓库
           echo "正在将节点信息推送到 CFSub 仓库..."
           echo "$BASE64_NODE" > appwrite_base64.txt
           git clone https://x-access-token:${GIT_CFSUB_PAT}@github.com/yutian81/CFSub.git
@@ -130,7 +117,6 @@ jobs:
           fi
           cd ..
 
-          # 4. 删除所有旧的、失败的和进行中的部署
           echo "正在清理所有旧的部署..."
           if [ -n "${{ steps.get_status.outputs.failed_ids }}" ]; then
             for FAILED_ID in ${{ steps.get_status.outputs.failed_ids }}; do
@@ -154,4 +140,3 @@ jobs:
             done
           fi
           echo "已完成旧部署的清理。"
-
