@@ -13,7 +13,7 @@ jobs:
       APPWRITE_SITE_ID: ${{ secrets.APPWRITE_SITE_ID }}
       APPWRITE_API_ENDPOINT: ${{ secrets.APPWRITE_API_ENDPOINT || 'https://syd.cloud.appwrite.io/v1' }}
       APPWRITE_API_KEY: ${{ secrets.APPWRITE_API_KEY }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GIT_TOKEN }}
 
     steps:
       - name: 检查环境变量
