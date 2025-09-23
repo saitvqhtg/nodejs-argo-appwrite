@@ -62,15 +62,17 @@ jobs:
         run: |
           # 1. 触发新的部署
           echo "正在触发一次新的部署..."
+          
+          # 使用 jq 安全地构建 JSON 请求体
+          JSON_PAYLOAD=$(jq -n \
+            --arg repoId "$APPWRITE_REPO_ID" \
+            '{providerRepositoryId: $repoId, providerBranch: "main", activate: true}')
+
           NEW_DEPLOYMENT_JSON=$(curl --verbose --location --request POST "${APPWRITE_API_ENDPOINT}/sites/${APPWRITE_SITE_ID}/deployments" \
           --header "Content-Type: application/json" \
           --header "X-Appwrite-Project: ${APPWRITE_PROJECT_ID}" \
           --header "X-Appwrite-Key: ${APPWRITE_API_KEY}" \
-          --data-raw '{
-              "providerRepositoryId": "'"$APPWRITE_REPO_ID"'",
-              "providerBranch": "main",
-              "activate": false
-          }')
+          --data-raw "$JSON_PAYLOAD")
           
           echo "--- Appwrite API 响应 ---"
           echo "$NEW_DEPLOYMENT_JSON"
